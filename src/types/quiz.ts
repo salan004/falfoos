@@ -26,11 +26,20 @@ export interface VoteRecord {
 
 export interface QuestionRoundState {
   votes: Map<string, VoteRecord>;
-  rewardedUsers: Set<string>;
   ended: boolean;
   questionStartedAt: number;
   timerInterval: ReturnType<typeof setInterval> | null;
   endTimeout: ReturnType<typeof setTimeout> | null;
+}
+
+export interface ParticipantData {
+  userId: string;
+  username: string;
+  correctCount: number;
+  wrongCount: number;
+  totalTime: number;
+  pointsEarned: number;
+  answerSequence: boolean[];
 }
 
 export interface QuizState {
@@ -48,14 +57,14 @@ export interface QuizState {
   pointsEarned: number;
   coinsEarned: number;
   round: QuestionRoundState | null;
-  totalPointsAwarded: number;
-  totalCoinsAwarded: number;
+  participants: Map<string, ParticipantData>;
   preQuizUserSnapshot: {
     points: number;
     coins: number;
     level: number;
     correct_answers: number;
     wrong_answers: number;
+    current_streak: number;
   } | null;
 }
 
@@ -65,6 +74,7 @@ export interface LeaderboardEntry {
   points: number;
   level: number;
   correctAnswers: number;
+  wins: number;
 }
 
 export interface ImportQuestion {

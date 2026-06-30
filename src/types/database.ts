@@ -28,6 +28,12 @@ export interface UserRow {
   correct_answers: number;
   wrong_answers: number;
   total_quizzes: number;
+  current_streak: number;
+  best_streak: number;
+  first_place: number;
+  second_place: number;
+  third_place: number;
+  total_wins: number;
   created_at: string;
 }
 
@@ -49,4 +55,15 @@ export interface QuizAnswerRow {
   selected_answer: string;
   is_correct: boolean;
   answered_at: string;
+}
+
+export interface QuizParticipantRow {
+  id: number;
+  session_id: number;
+  user_id: string;
+  correct_count: number;
+  wrong_count: number;
+  total_time: number;
+  points_earned: number;
+  position: number;
 }

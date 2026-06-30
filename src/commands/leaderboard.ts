@@ -18,7 +18,7 @@ export async function handleLeaderboardCommand(interaction: ChatInputCommandInte
       embeds: [
         new EmbedBuilder()
           .setColor('#1a7c3a' as any)
-          .setTitle('🏆 لوحة المتصدرين')
+          .setTitle('🏆 قائمة المتصدرين')
           .setDescription('لا يوجد مشاركون بعد. ابدأ المسابقات واكسب النقاط!')
           .setTimestamp(),
       ],
@@ -39,6 +39,8 @@ export async function handleLeaderboardCommand(interaction: ChatInputCommandInte
     points: e.points,
     level: e.level,
     correctAnswers: e.correct_answers,
+    wrongAnswers: e.wrong_answers,
+    firstPlace: e.first_place,
   }));
 
   const embed = buildLeaderboardEmbed(rankedEntries, page, totalPages);

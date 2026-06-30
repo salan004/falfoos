@@ -13,7 +13,7 @@ export async function handleProfileCommand(interaction: ChatInputCommandInteract
   const user = getUser(userId, guildId);
 
   if (!user) {
-    await interaction.editReply({ content: '❌ Profile not found. Join a quiz first!' });
+    await interaction.editReply({ content: '❌ الملف الشخصي غير موجود. شارك في مسابقة أولاً!' });
     return;
   }
 
@@ -30,6 +30,12 @@ export async function handleProfileCommand(interaction: ChatInputCommandInteract
     totalQuizzes: user.total_quizzes,
     nextLevelPoints,
     rank: rankInfo?.rank,
+    currentStreak: user.current_streak || 0,
+    bestStreak: user.best_streak || 0,
+    firstPlace: user.first_place || 0,
+    secondPlace: user.second_place || 0,
+    thirdPlace: user.third_place || 0,
+    totalWins: user.total_wins || 0,
   });
 
   await interaction.editReply({ embeds: [embed] });

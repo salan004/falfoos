@@ -14,4 +14,8 @@ export const config = {
   quizCooldown: 5_000,
   maxQuestionsPerQuiz: 20,
   leaderboardPageSize: 10,
+  pointsFirstPlace: 10,
+  pointsSecondPlace: 5,
+  pointsThirdPlace: 3,
+  pointsCorrectAnswer: 1,
 };

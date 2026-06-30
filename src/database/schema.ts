@@ -1,4 +1,56 @@
-import { executeBatch } from './helpers';
+import { execute, executeBatch, queryOne } from './helpers';
+
+function migrateUsersTable(): void {
+  const existing = queryOne('PRAGMA table_info(users)');
+  if (!existing) return;
+
+  const columns: string[] = [];
+  const stmt = queryOne('SELECT group_concat(name) as names FROM pragma_table_info(\'users\')');
+  if (stmt) {
+    const names = (stmt.names as string) || '';
+    columns.push(...names.split(','));
+  }
+
+  const migrations: { col: string; def: string }[] = [
+    { col: 'current_streak', def: 'INTEGER DEFAULT 0' },
+    { col: 'best_streak', def: 'INTEGER DEFAULT 0' },
+    { col: 'first_place', def: 'INTEGER DEFAULT 0' },
+    { col: 'second_place', def: 'INTEGER DEFAULT 0' },
+    { col: 'third_place', def: 'INTEGER DEFAULT 0' },
+    { col: 'total_wins', def: 'INTEGER DEFAULT 0' },
+  ];
+
+  for (const m of migrations) {
+    if (!columns.includes(m.col)) {
+      try {
+        execute(`ALTER TABLE users ADD COLUMN ${m.col} ${m.def}`);
+      } catch {
+        // column already exists
+      }
+    }
+  }
+}
+
+function migrateQuizSessionsTable(): void {
+  const stmt = queryOne('SELECT group_concat(name) as names FROM pragma_table_info(\'quiz_sessions\')');
+  if (!stmt) return;
+  const names = (stmt.names as string) || '';
+  const columns = names.split(',');
+
+  const migrations: { col: string; def: string }[] = [
+    { col: 'position', def: 'INTEGER DEFAULT 0' },
+  ];
+
+  for (const m of migrations) {
+    if (!columns.includes(m.col)) {
+      try {
+        execute(`ALTER TABLE quiz_sessions ADD COLUMN ${m.col} ${m.def}`);
+      } catch {
+        // column already exists
+      }
+    }
+  }
+}
 
 export function initializeSchema(): void {
   executeBatch(`
@@ -33,6 +85,12 @@ export function initializeSchema(): void {
       correct_answers INTEGER DEFAULT 0,
       wrong_answers INTEGER DEFAULT 0,
       total_quizzes INTEGER DEFAULT 0,
+      current_streak INTEGER DEFAULT 0,
+      best_streak INTEGER DEFAULT 0,
+      first_place INTEGER DEFAULT 0,
+      second_place INTEGER DEFAULT 0,
+      third_place INTEGER DEFAULT 0,
+      total_wins INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (user_id, guild_id)
     );
@@ -48,6 +106,7 @@ export function initializeSchema(): void {
       skipped_count INTEGER NOT NULL DEFAULT 0,
       points_earned INTEGER NOT NULL DEFAULT 0,
       coins_earned INTEGER NOT NULL DEFAULT 0,
+      position INTEGER DEFAULT 0,
       status TEXT DEFAULT 'active' CHECK(status IN ('active','completed','cancelled')),
       started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       ended_at DATETIME
@@ -65,10 +124,27 @@ export function initializeSchema(): void {
       FOREIGN KEY (session_id) REFERENCES quiz_sessions(id)
     );
 
+    CREATE TABLE IF NOT EXISTS quiz_participants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER NOT NULL,
+      user_id TEXT NOT NULL,
+      correct_count INTEGER NOT NULL DEFAULT 0,
+      wrong_count INTEGER NOT NULL DEFAULT 0,
+      total_time INTEGER NOT NULL DEFAULT 0,
+      points_earned INTEGER NOT NULL DEFAULT 0,
+      position INTEGER DEFAULT 0,
+      FOREIGN KEY (session_id) REFERENCES quiz_sessions(id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_questions_category ON questions(category_id);
     CREATE INDEX IF NOT EXISTS idx_users_guild ON users(guild_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_guild ON quiz_sessions(guild_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON quiz_sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_answers_session ON quiz_answers(session_id);
+    CREATE INDEX IF NOT EXISTS idx_participants_session ON quiz_participants(session_id);
+    CREATE INDEX IF NOT EXISTS idx_participants_user ON quiz_participants(user_id);
   `);
+
+  migrateUsersTable();
+  migrateQuizSessionsTable();
 }

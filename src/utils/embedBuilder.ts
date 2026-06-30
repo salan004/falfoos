@@ -1,5 +1,5 @@
 import { EmbedBuilder, ColorResolvable } from 'discord.js';
-import { Question } from '../types/quiz';
+import { Question, ParticipantData } from '../types/quiz';
 import { LETTER_LABELS, getCorrectAnswerLabel, getQuestionOptions } from './quizHelpers';
 
 export function buildActiveQuizEmbed(
@@ -13,18 +13,18 @@ export function buildActiveQuizEmbed(
 
   return new EmbedBuilder()
     .setColor('#1a7c3a' as ColorResolvable)
-    .setTitle(`📖 ${question.categoryNameAr || 'Islamic Quiz'}`)
+    .setTitle(`📖 ${question.categoryNameAr || 'مسابقة إسلامية'}`)
     .setDescription(
-      `**Question ${questionNumber}/${totalQuestions}** | Difficulty: ${difficultyStars}\n\n` +
+      `**السؤال ${questionNumber}/${totalQuestions}** | ${difficultyStars}\n\n` +
       `> ${question.questionAr}\n\n` +
-      `**⏱ Time remaining: ${remainingSeconds}s**\n\n` +
+      `**⏱ الوقت المتبقي: ${remainingSeconds}ث**\n\n` +
       `**${LETTER_LABELS.A}** ─ ${options.A}\n` +
       `**${LETTER_LABELS.B}** ─ ${options.B}\n` +
       `**${LETTER_LABELS.C}** ─ ${options.C}\n` +
       `**${LETTER_LABELS.D}** ─ ${options.D}\n\n` +
-      'Vote using the poll below to answer.',
+      'صوّت باستخدام الاستطلاع أدناه للإجابة.',
     )
-    .setFooter({ text: 'Vote in the poll • One answer only' })
+    .setFooter({ text: 'صوّت في الاستطلاع • إجابة واحدة فقط' })
     .setTimestamp();
 }
 
@@ -42,22 +42,22 @@ export function buildQuizRevealEmbed(
 
   const winnersSection = winnerIds.length > 0
     ? winnerIds.map(id => `• <@${id}>`).join('\n')
-    : 'No one answered correctly this round.';
+    : 'لم يجب أحد بشكل صحيح هذه المرة.';
 
   const explanationLine = question.source
-    ? `\n📖 **Explanation:** ${question.source}\n`
+    ? `\n📖 **الشرح:** ${question.source}\n`
     : '';
 
   return new EmbedBuilder()
     .setColor('#f5a623' as ColorResolvable)
-    .setTitle(`📖 ${question.categoryNameAr || 'Islamic Quiz'} — Results`)
+    .setTitle(`📖 ${question.categoryNameAr || 'مسابقة إسلامية'} — النتيجة`)
     .setDescription(
-      `**Question ${questionNumber}/${totalQuestions}** | Difficulty: ${difficultyStars}\n\n` +
+      `**السؤال ${questionNumber}/${totalQuestions}** | ${difficultyStars}\n\n` +
       `> ${question.questionAr}\n\n` +
-      `✅ **Correct answer:** ${correctLetter} ─ ${correctLabel}\n` +
+      `✅ **الإجابة الصحيحة:** ${correctLetter} ─ ${correctLabel}\n` +
       explanationLine +
-      `⏱ **Quiz duration:** ${durationSeconds}s\n\n` +
-      `🏆 **Correct Answers**\n${winnersSection}`,
+      `⏱ **مدة السؤال:** ${durationSeconds}ث\n\n` +
+      `🏆 **الإجابات الصحيحة**\n${winnersSection}`,
     )
     .setTimestamp();
 }
@@ -72,49 +72,74 @@ export function buildFinalResultsEmbed(
   level: number,
   nextLevelPoints: number,
   levelUp: boolean,
-  validationMsg?: string,
+  topParticipants: ParticipantData[],
+  positions: Map<string, number>,
+  totalParticipants: number,
+  accuracyRate: number,
+  quizDuration: number,
 ): EmbedBuilder {
   const accuracy = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
-  const grade = accuracy >= 90 ? 'Excellent 🏆' : accuracy >= 75 ? 'Very Good 🌟' : accuracy >= 50 ? 'Good 👍' : 'Keep practicing 💪';
+
+  const top3Lines: string[] = [];
+  const positionEmojis: Record<number, string> = { 1: '🥇👑', 2: '🥈', 3: '🥉' };
+
+  for (const p of topParticipants.slice(0, 3)) {
+    const pos = positions.get(p.userId) || 0;
+    const emoji = positionEmojis[pos] || '';
+    top3Lines.push(
+      `${emoji} **<@${p.userId}>** (+${p.pointsEarned})`,
+    );
+  }
+
+  const topSection = top3Lines.length > 0 ? top3Lines.join('\n') : 'لا يوجد مشاركون';
+
+  const restLines = topParticipants.slice(3).map(p => {
+    const pos = positions.get(p.userId) || 0;
+    return `${pos}. **<@${p.userId}>** (+${p.pointsEarned})`;
+  });
 
   const description = [
-    `**Correct answers:** ${correctCount}/${totalQuestions} (${accuracy}%) ✅`,
-    `**Wrong answers:** ${wrongCount} ❌`,
-    `**Unanswered (timeout):** ${skippedCount} ⏰`,
-    '',
-    `**Points earned:** +${pointsEarned} 🎯`,
-    `**Coins earned:** +${coinsEarned} 🪙`,
-    '',
-    `**Current level:** ${level} 📈`,
-    `**Points to next level:** ${nextLevelPoints} 🎯`,
-    `**Grade:** ${grade}`,
-    levelUp ? '# 🎉 Congratulations! You leveled up!' : '',
-    validationMsg ? `\n───\n**Validation:**\n${validationMsg}` : '',
+    `🏆 **نتائج المسابقة**\n`,
+    topSection,
+    restLines.length > 0 ? `\n${restLines.join('\n')}` : '',
+    `\n━━━━━━━━━━━━━━━━━━`,
+    `✅ **الإجابة الصحيحة:** تم عرضها`,
+    `📖 **الإجابات الصحيحة:** ${correctCount}/${totalQuestions}`,
+    `👥 **عدد المشاركين:** ${totalParticipants}`,
+    `🎯 **نسبة الدقة:** ${accuracyRate}%`,
+    `⏱ **مدة الاختبار:** ${quizDuration}ث`,
+    `━━━━━━━━━━━━━━━━━━`,
+    `**نقاطك:** +${pointsEarned} 🎯`,
+    `**المستوى:** ${level} 📈`,
+    levelUp ? '🎉 **تهانينا! لقد ارتفع مستواك!**' : '',
   ].filter(Boolean).join('\n');
 
   return new EmbedBuilder()
     .setColor(levelUp ? '#ffd700' : '#1a7c3a' as ColorResolvable)
-    .setTitle('📊 Quiz Results')
+    .setTitle('🏆 نتائج المسابقة')
     .setDescription(description)
     .setTimestamp();
 }
 
 export function buildLeaderboardEmbed(
-  entries: { rank: number; username: string; points: number; level: number; correctAnswers: number }[],
+  entries: { rank: number; username: string; points: number; level: number; correctAnswers: number; wrongAnswers: number; firstPlace: number }[],
   page: number,
   totalPages: number,
 ): EmbedBuilder {
-  const medals = ['🥇', '🥈', '🥉'];
+  const medals: Record<number, string> = { 1: '🥇👑', 2: '🥈', 3: '🥉' };
+
   const lines = entries.map(e => {
-    const medal = e.rank <= 3 ? medals[e.rank - 1] : `${e.rank}.`;
-    return `${medal} **${e.username}** — Level ${e.level} | ${e.points} pts | ${e.correctAnswers} correct`;
+    const medal = medals[e.rank] || `${e.rank}.`;
+    const total = e.correctAnswers + e.wrongAnswers;
+    const acc = total > 0 ? Math.round((e.correctAnswers / total) * 100) : 0;
+    return `${medal} **${e.username}** — ${e.points} نقطة | دقة ${acc}% | ${e.firstPlace} فوز`;
   });
 
   return new EmbedBuilder()
     .setColor('#1a7c3a' as ColorResolvable)
-    .setTitle('🏆 Leaderboard')
+    .setTitle('🏆 قائمة المتصدرين')
     .setDescription(lines.join('\n'))
-    .setFooter({ text: `Page ${page}/${totalPages}` })
+    .setFooter({ text: `الصفحة ${page}/${totalPages}` })
     .setTimestamp();
 }
 
@@ -128,24 +153,38 @@ export function buildProfileEmbed(data: {
   totalQuizzes: number;
   nextLevelPoints: number;
   rank?: number;
+  currentStreak: number;
+  bestStreak: number;
+  firstPlace: number;
+  secondPlace: number;
+  thirdPlace: number;
+  totalWins: number;
 }): EmbedBuilder {
   const total = data.correctAnswers + data.wrongAnswers;
   const accuracy = total > 0 ? Math.round((data.correctAnswers / total) * 100) : 0;
-  const rankLine = data.rank ? `**Server rank:** #${data.rank} 🏅\n` : '';
+  const top3 = data.firstPlace + data.secondPlace + data.thirdPlace;
+  const rankLine = data.rank ? `**الترتيب:** #${data.rank}\n` : '';
+
+  const crownPrefix = data.rank && data.rank === 1 ? '👑 ' : '';
 
   return new EmbedBuilder()
     .setColor('#1a7c3a' as ColorResolvable)
-    .setTitle(`📋 ${data.username}'s Profile`)
+    .setTitle(`📊 إحصائيات ${crownPrefix}${data.username}`)
     .setDescription(
       rankLine +
-      `**Level:** ${data.level} 📈\n` +
-      `**Points:** ${data.points} 🎯\n` +
-      `**Coins:** ${data.coins} 🪙\n` +
-      `**Points to next level:** ${data.nextLevelPoints}\n\n` +
-      `**Correct answers:** ${data.correctAnswers} ✅\n` +
-      `**Wrong answers:** ${data.wrongAnswers} ❌\n` +
-      `**Accuracy:** ${accuracy}%\n` +
-      `**Total quizzes:** ${data.totalQuizzes} 📊`,
+      `**المستوى:** ${data.level} 📈\n` +
+      `**النقاط:** ${data.points} 🎯\n` +
+      `**النقاط للمستوى التالي:** ${data.nextLevelPoints}\n\n` +
+      `**✅ الإجابات الصحيحة:** ${data.correctAnswers}\n` +
+      `**❌ الإجابات الخاطئة:** ${data.wrongAnswers}\n` +
+      `**📈 نسبة النجاح:** ${accuracy}%\n` +
+      `**🎮 عدد المسابقات:** ${data.totalQuizzes}\n\n` +
+      `**🔥 السلسلة الحالية:** ${data.currentStreak}\n` +
+      `**⭐ أفضل سلسلة:** ${data.bestStreak}\n\n` +
+      `**🥇 المركز الأول:** ${data.firstPlace}\n` +
+      `**🥈 المركز الثاني:** ${data.secondPlace}\n` +
+      `**🥉 المركز الثالث:** ${data.thirdPlace}\n` +
+      `**🏆 إجمالي الفوز:** ${data.totalWins}`,
     )
     .setTimestamp();
 }
@@ -153,7 +192,7 @@ export function buildProfileEmbed(data: {
 export function buildErrorEmbed(message: string): EmbedBuilder {
   return new EmbedBuilder()
     .setColor('#e74c3c' as ColorResolvable)
-    .setTitle('⚠️ Error')
+    .setTitle('⚠️ خطأ')
     .setDescription(message)
     .setTimestamp();
 }
@@ -165,13 +204,15 @@ export function buildRankEmbed(
   level: number,
   totalPlayers: number,
 ): EmbedBuilder {
+  const crownPrefix = rank === 1 ? '👑 ' : '';
+
   return new EmbedBuilder()
     .setColor('#1a7c3a' as ColorResolvable)
-    .setTitle('🏅 Your Rank')
+    .setTitle(`🏅 ترتيب ${crownPrefix}${username}`)
     .setDescription(
-      `**${username}** is ranked **#${rank}** of **${totalPlayers}** players.\n\n` +
-      `**Points:** ${points} 🎯\n` +
-      `**Level:** ${level} 📈`,
+      `**${crownPrefix}${username}** في المرتبة **#${rank}** من **${totalPlayers}** لاعباً.\n\n` +
+      `**النقاط:** ${points} 🎯\n` +
+      `**المستوى:** ${level} 📈`,
     )
     .setTimestamp();
 }

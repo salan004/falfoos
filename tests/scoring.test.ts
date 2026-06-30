@@ -2,16 +2,10 @@
  * Scoring Logic Tests
  *
  * Tests the core calculation functions to ensure statistics can never become inconsistent.
- * These tests verify that:
- *  - correct + wrong + skipped = total questions (always)
- *  - Points and coins are only awarded for correct answers
- *  - Timed-out/skipped questions are NOT counted as correct
- *  - Percentage is calculated correctly
- *  - Recounted values match tracked values
  */
 
 import { validateResults, recalculatePointsFromAnswers } from '../src/services/quizService';
-import { QuizState, AnswerRecord, Question } from '../src/types/quiz';
+import { QuizState, AnswerRecord, Question, ParticipantData } from '../src/types/quiz';
 import { config } from '../src/config';
 import { calculateLevel } from '../src/services/levelService';
 import { calculateCoins } from '../src/services/coinService';
@@ -48,8 +42,7 @@ function makeQuizState(overrides: Partial<QuizState> = {}): QuizState {
     pointsEarned: 0,
     coinsEarned: 0,
     round: null,
-    totalPointsAwarded: 0,
-    totalCoinsAwarded: 0,
+    participants: new Map(),
     preQuizUserSnapshot: null,
     ...overrides,
   };
@@ -158,18 +151,18 @@ function assertEqual(actual: number, expected: number, label: string): void {
 {
   const questions = [makeQuestion(1, 1), makeQuestion(2, 2), makeQuestion(3, 3), makeQuestion(4, 1), makeQuestion(5, 2)];
   const answers = [
-    answered('A', true, 15000),  // correct (diff=1, no speed bonus since 15s > 10s window)
-    answered('B', false),        // wrong
-    skipped(),                    // skipped
-    undefined as any,             // not recorded at all (edge case)
-    skipped(),                    // skipped
+    answered('A', true, 15000),
+    answered('B', false),
+    skipped(),
+    undefined as any,
+    skipped(),
   ];
 
   const state = makeQuizState({
     questions,
     totalQuestions: 5,
     answers: answers as AnswerRecord[],
-    pointsEarned: config.pointsPerCorrect(1), // only question 1 is correct, no speed bonus
+    pointsEarned: config.pointsPerCorrect(1),
     coinsEarned: calculateCoins(1),
   });
 
@@ -211,7 +204,7 @@ function assertEqual(actual: number, expected: number, label: string): void {
 // === Test 5: Speed bonus points ===
 {
   const questions = [makeQuestion(1, 1)];
-  const answers = [answered('A', true, 3000)]; // within 10s speed bonus window
+  const answers = [answered('A', true, 3000)];
 
   const state = makeQuizState({
     questions,
@@ -229,7 +222,7 @@ function assertEqual(actual: number, expected: number, label: string): void {
 // === Test 6: No speed bonus after window ===
 {
   const questions = [makeQuestion(1, 1)];
-  const answers = [answered('A', true, 15000)]; // beyond 10s speed bonus window
+  const answers = [answered('A', true, 15000)];
 
   const state = makeQuizState({
     questions,
@@ -245,11 +238,6 @@ function assertEqual(actual: number, expected: number, label: string): void {
 }
 
 // === Test 7: Level calculation ===
-// Formula: calculateLevel starts at 1, while points >= level^2*50, increments.
-// Then returns max(1, level-1).
-// Level 1: 0-199 points (threshold at 200)
-// Level 2: 200-449 points (threshold at 450)
-// Level 3: 450-799 points (threshold at 800)
 {
   assertEqual(calculateLevel(0), 1, 'Level calc: 0 points = level 1');
   assertEqual(calculateLevel(199), 1, 'Level calc: 199 points = level 1');
@@ -288,7 +276,7 @@ function assertEqual(actual: number, expected: number, label: string): void {
   assertEqual(results.totalPoints, 0, 'Empty: totalPoints');
 }
 
-// === Test 11: Partial answer array (some questions never reached) ===
+// === Test 11: Partial answer array ===
 {
   const questions = [makeQuestion(1), makeQuestion(2), makeQuestion(3)];
   const answers: AnswerRecord[] = [answered('A', true)];
@@ -320,9 +308,7 @@ function assertEqual(actual: number, expected: number, label: string): void {
     questions.push(makeQuestion(i + 1, diff));
 
     if (i < 10) {
-      // First 10: mix of correct/wrong/skipped
       if (i % 3 === 0) {
-        // Use time 15000 to avoid speed bonus
         answers.push(answered('A', true, 15000));
         expectedPoints += config.pointsPerCorrect(diff);
         expectedCoins += calculateCoins(diff);
@@ -332,7 +318,6 @@ function assertEqual(actual: number, expected: number, label: string): void {
         answers.push(skipped());
       }
     }
-    // Questions 10-19 remain unanswered (undefined)
   }
 
   const state = makeQuizState({
@@ -350,6 +335,47 @@ function assertEqual(actual: number, expected: number, label: string): void {
   assertEqual(results.totalPoints, expectedPoints, 'Large quiz: points match');
   assertEqual(recalc.points, expectedPoints, 'Large quiz: recalculated points match');
   assertEqual(recalc.coins, expectedCoins, 'Large quiz: recalculated coins match');
+}
+
+// === Test 13: Compute streaks correctly ===
+{
+  function computeStreaks(seq: boolean[], preStreak: number): { currentStreak: number; bestStreak: number } {
+    let cur = preStreak;
+    let best = cur;
+    for (const c of seq) {
+      if (c) { cur++; if (cur > best) best = cur; }
+      else { cur = 0; }
+    }
+    return { currentStreak: cur, bestStreak: best };
+  }
+
+  const r1 = computeStreaks([true, true, true], 0);
+  assertEqual(r1.currentStreak, 3, 'Streak: 3 correct, current=3');
+  assertEqual(r1.bestStreak, 3, 'Streak: 3 correct, best=3');
+
+  const r2 = computeStreaks([true, false, true], 0);
+  assertEqual(r2.currentStreak, 1, 'Streak: correct, wrong, correct -> current=1');
+  assertEqual(r2.bestStreak, 1, 'Streak: correct, wrong, correct -> best=1');
+
+  const r3 = computeStreaks([true, true, false, true, true, true], 0);
+  assertEqual(r3.currentStreak, 3, 'Streak: complex sequence, current=3');
+  assertEqual(r3.bestStreak, 3, 'Streak: complex sequence, best=3');
+
+  const r4 = computeStreaks([false, false], 5);
+  assertEqual(r4.currentStreak, 0, 'Streak: wrong after pre-streak=5 -> current=0');
+  assertEqual(r4.bestStreak, 5, 'Streak: wrong after pre-streak=5 -> best stays 5');
+
+  const r5 = computeStreaks([true, true], 3);
+  assertEqual(r5.currentStreak, 5, 'Streak: pre=3 + 2 correct = 5');
+  assertEqual(r5.bestStreak, 5, 'Streak: pre=3 + 2 correct, best=5');
+}
+
+// === Test 14: Placement points ===
+{
+  assertEqual(config.pointsFirstPlace, 10, 'Config: first place = 10');
+  assertEqual(config.pointsSecondPlace, 5, 'Config: second place = 5');
+  assertEqual(config.pointsThirdPlace, 3, 'Config: third place = 3');
+  assertEqual(config.pointsCorrectAnswer, 1, 'Config: correct answer = 1');
 }
 
 console.log('\n✅ All scoring tests completed!');

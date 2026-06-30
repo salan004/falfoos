@@ -3,13 +3,15 @@ import {
   Message,
   PollAnswer,
   TextChannel,
+  Guild,
 } from 'discord.js';
 import { config } from '../config';
-import { QuizState, AnswerRecord, QuestionRoundState } from '../types/quiz';
+import { QuizState, AnswerRecord, QuestionRoundState, ParticipantData } from '../types/quiz';
 import { getRandomQuestion } from '../database/questions';
 import {
   upsertUser,
   getUser,
+  incrementUserPlacement,
 } from '../database/users';
 import { calculateLevel } from './levelService';
 import { calculateCoins } from './coinService';
@@ -45,7 +47,6 @@ function getChannelQuizKey(guildId: string, channelId: string): string {
 function createRoundState(): QuestionRoundState {
   return {
     votes: new Map(),
-    rewardedUsers: new Set(),
     ended: false,
     questionStartedAt: Date.now(),
     timerInterval: null,
@@ -111,7 +112,7 @@ export async function startQuiz(
 
   if (isQuizActiveInChannel(guildId, channel.id)) {
     await channel.send({
-      embeds: [buildErrorEmbed('There is already an active quiz in this channel.')],
+      embeds: [buildErrorEmbed('يوجد اختبار نشط بالفعل في هذه القناة.')],
     });
     return;
   }
@@ -127,7 +128,7 @@ export async function startQuiz(
   }
 
   if (questions.length === 0) {
-    await channel.send({ embeds: [buildErrorEmbed('No questions are available right now.')] });
+    await channel.send({ embeds: [buildErrorEmbed('لا توجد أسئلة متاحة حالياً.')] });
     return;
   }
 
@@ -149,8 +150,7 @@ export async function startQuiz(
     pointsEarned: 0,
     coinsEarned: 0,
     round: null,
-    totalPointsAwarded: 0,
-    totalCoinsAwarded: 0,
+    participants: new Map(),
     preQuizUserSnapshot: startUser
       ? {
           points: startUser.points,
@@ -158,6 +158,7 @@ export async function startQuiz(
           level: startUser.level,
           correct_answers: startUser.correct_answers,
           wrong_answers: startUser.wrong_answers,
+          current_streak: startUser.current_streak || 0,
         }
       : null,
   };
@@ -217,7 +218,7 @@ async function sendNextQuestion(channel: TextChannel, quizState: QuizState): Pro
   } catch (err) {
     console.error('[QUIZ ERROR] Failed to send poll message:', err);
     await channel.send({
-      embeds: [buildErrorEmbed('Failed to start the quiz poll. Ensure the bot has permission to create polls.')],
+      embeds: [buildErrorEmbed('فشل في بدء الاختبار. تأكد من صلاحيات البوت.')],
     });
     activeQuizzes.delete(getChannelQuizKey(quizState.guildId, quizState.channelId));
     return;
@@ -269,6 +270,7 @@ async function endQuestionRound(
   const questionIndex = quizState.currentIndex;
   const durationMs = Date.now() - round.questionStartedAt;
   const correctAnswerId = ANSWER_ID_MAP[question.correctAnswer];
+  const deadline = round.questionStartedAt + config.quizTimeLimit;
 
   let message: Message | null = null;
   if (quizState.messageId) {
@@ -282,8 +284,8 @@ async function endQuestionRound(
     }
   }
 
-  const winnerIds = getCorrectVoters(round, correctAnswerId, round.questionStartedAt + config.quizTimeLimit);
-  await awardWinners(channel, quizState, question, winnerIds);
+  const winnerIds = getCorrectVoters(round, correctAnswerId, deadline);
+  await recordRoundResults(quizState, question, round, winnerIds, channel.guild);
 
   const starterVote = round.votes.get(quizState.userId);
   const starterAnswer = starterVote ? ANSWER_ID_TO_LETTER[starterVote.answerId] : null;
@@ -315,7 +317,7 @@ async function endQuestionRound(
   }
 
   if (reason === 'skipped') {
-    await channel.send('⏭️ Question skipped. Moving to the next question...').catch(() => {});
+    await channel.send('⏭️ تم تخطي السؤال. الانتقال إلى السؤال التالي...').catch(() => {});
   }
 
   if (quizState.messageId) {
@@ -344,93 +346,114 @@ function getCorrectVoters(
   return winners;
 }
 
-async function awardWinners(
-  channel: TextChannel,
+async function recordRoundResults(
   quizState: QuizState,
   question: QuizState['questions'][number],
+  round: QuestionRoundState,
   winnerIds: string[],
+  guild: Guild,
 ): Promise<void> {
-  const round = quizState.round;
-  if (!round) return;
+  const correctAnswerId = ANSWER_ID_MAP[question.correctAnswer];
+  const deadline = round.questionStartedAt + config.quizTimeLimit;
 
-  for (const userId of winnerIds) {
-    if (round.rewardedUsers.has(userId)) continue;
+  for (const [userId, vote] of round.votes.entries()) {
+    if (vote.votedAt > deadline) continue;
 
-    const vote = round.votes.get(userId);
-    if (!vote) continue;
-
-    round.rewardedUsers.add(userId);
-
+    const isCorrect = vote.answerId === correctAnswerId;
     const responseTime = vote.votedAt - round.questionStartedAt;
-    const isSpeedBonus = responseTime <= config.speedBonusWindow;
-    let earnedPoints = config.pointsPerCorrect(question.difficulty);
-    if (isSpeedBonus) earnedPoints += config.speedBonusPoints;
-    const earnedCoins = calculateCoins(question.difficulty);
 
-    quizState.totalPointsAwarded += earnedPoints;
-    quizState.totalCoinsAwarded += earnedCoins;
+    let participant = quizState.participants.get(userId);
+    if (!participant) {
+      let username = 'مستخدم';
+      try {
+        const member = await guild.members.fetch(userId).catch(() => null);
+        username = member?.user.username || 'مستخدم';
+      } catch { /* ignore */ }
 
-    if (userId === quizState.userId) {
-      quizState.pointsEarned += earnedPoints;
-      quizState.coinsEarned += earnedCoins;
+      participant = {
+        userId,
+        username,
+        correctCount: 0,
+        wrongCount: 0,
+        totalTime: 0,
+        pointsEarned: 0,
+        answerSequence: [],
+      };
+      quizState.participants.set(userId, participant);
     }
 
-    try {
-      const member = await channel.guild.members.fetch(userId).catch(() => null);
-      const username = member?.user.username || 'User';
-      upsertUser(userId, quizState.guildId, username);
+    if (isCorrect) {
+      participant.correctCount++;
+      participant.totalTime += responseTime;
+      const pts = config.pointsPerCorrect(question.difficulty);
+      const isSpeedBonus = responseTime <= config.speedBonusWindow;
+      const earnedPoints = pts + (isSpeedBonus ? config.speedBonusPoints : 0);
 
-      beginTransaction();
-      execInTransaction(
-        `UPDATE users SET
-          correct_answers = correct_answers + 1,
-          points = points + ?,
-          coins = coins + ?
-         WHERE user_id = ? AND guild_id = ?`,
-        [earnedPoints, earnedCoins, userId, quizState.guildId],
-      );
+      participant.pointsEarned += earnedPoints;
+      participant.answerSequence.push(true);
 
-      const userRow = queryOne(
-        'SELECT points, level FROM users WHERE user_id = ? AND guild_id = ?',
-        [userId, quizState.guildId],
-      );
-
-      if (userRow) {
-        const newLevel = calculateLevel(userRow.points as number);
-        if (newLevel !== (userRow.level as number)) {
-          execInTransaction(
-            'UPDATE users SET level = ? WHERE user_id = ? AND guild_id = ?',
-            [newLevel, userId, quizState.guildId],
-          );
-        }
+      if (userId === quizState.userId) {
+        quizState.pointsEarned += earnedPoints;
+        quizState.coinsEarned += calculateCoins(question.difficulty);
       }
+    } else {
+      participant.wrongCount++;
+      participant.answerSequence.push(false);
+    }
+  }
+}
 
-      commitTransaction();
-    } catch (err) {
-      console.error('[QUIZ ERROR] Failed to award points:', err);
-      try { rollbackTransaction(); } catch (_) { /* no active transaction */ }
+function determineTopParticipants(quizState: QuizState): Map<string, number> {
+  const sorted = Array.from(quizState.participants.values())
+    .filter(p => p.correctCount > 0 || p.wrongCount > 0)
+    .sort((a, b) => {
+      if (b.correctCount !== a.correctCount) return b.correctCount - a.correctCount;
+      return a.totalTime - b.totalTime;
+    });
+
+  const positions = new Map<string, number>();
+
+  for (let i = 0; i < sorted.length; i++) {
+    const position = i + 1;
+    positions.set(sorted[i].userId, position);
+  }
+
+  return positions;
+}
+
+function awardPlacementPoints(positions: Map<string, number>, quizState: QuizState): void {
+  for (const [userId, position] of positions) {
+    const participant = quizState.participants.get(userId);
+    if (!participant) continue;
+
+    let bonus = 0;
+    if (position === 1) bonus = config.pointsFirstPlace;
+    else if (position === 2) bonus = config.pointsSecondPlace;
+    else if (position === 3) bonus = config.pointsThirdPlace;
+
+    if (bonus > 0) {
+      participant.pointsEarned += bonus;
+      if (userId === quizState.userId) {
+        quizState.pointsEarned += bonus;
+      }
+    }
+  }
+}
+
+function computeStreaks(participant: ParticipantData, preStreak: number): { currentStreak: number; bestStreak: number } {
+  let curStreak = preStreak;
+  let best = curStreak;
+
+  for (const isCorrect of participant.answerSequence) {
+    if (isCorrect) {
+      curStreak++;
+      if (curStreak > best) best = curStreak;
+    } else {
+      curStreak = 0;
     }
   }
 
-  for (const [userId] of round.votes.entries()) {
-    if (winnerIds.includes(userId)) continue;
-
-    try {
-      const member = await channel.guild.members.fetch(userId).catch(() => null);
-      const username = member?.user.username || 'User';
-      upsertUser(userId, quizState.guildId, username);
-
-      beginTransaction();
-      execInTransaction(
-        'UPDATE users SET wrong_answers = wrong_answers + 1 WHERE user_id = ? AND guild_id = ?',
-        [userId, quizState.guildId],
-      );
-      commitTransaction();
-    } catch (err) {
-      console.error('[QUIZ ERROR] Failed to record wrong answer:', err);
-      try { rollbackTransaction(); } catch (_) { /* no active transaction */ }
-    }
-  }
+  return { currentStreak: curStreak, bestStreak: best };
 }
 
 export function validateResults(quizState: QuizState): {
@@ -496,18 +519,31 @@ async function finishQuiz(channel: TextChannel, quizState: QuizState): Promise<v
   quizState.status = 'completed';
   clearRoundTimers(quizState.round);
 
+  const positions = determineTopParticipants(quizState);
+  awardPlacementPoints(positions, quizState);
+
   const results = validateResults(quizState);
   const recalculated = recalculatePointsFromAnswers(quizState);
 
   const earnedPoints = Math.max(results.totalPoints, recalculated.points);
   const earnedCoins = Math.max(results.totalCoins, recalculated.coins);
 
+  const usernameMap = new Map<string, string>();
+  for (const [uid] of quizState.participants) {
+    try {
+      const member = await channel.guild.members.fetch(uid).catch(() => null);
+      usernameMap.set(uid, member?.user.username || 'مستخدم');
+    } catch {
+      usernameMap.set(uid, 'مستخدم');
+    }
+  }
+
   try {
     beginTransaction();
 
     execInTransaction(
-      `INSERT INTO quiz_sessions (guild_id, channel_id, user_id, total_questions, correct_count, wrong_count, skipped_count, points_earned, coins_earned, status, started_at, ended_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', datetime('now'), datetime('now'))`,
+      `INSERT INTO quiz_sessions (guild_id, channel_id, user_id, total_questions, correct_count, wrong_count, skipped_count, points_earned, coins_earned, position, status, started_at, ended_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', datetime('now'), datetime('now'))`,
       [
         quizState.guildId,
         quizState.channelId,
@@ -516,8 +552,9 @@ async function finishQuiz(channel: TextChannel, quizState: QuizState): Promise<v
         results.correctCount,
         results.wrongCount,
         results.skippedCount,
-        quizState.totalPointsAwarded,
-        quizState.totalCoinsAwarded,
+        earnedPoints,
+        earnedCoins,
+        positions.get(quizState.userId) || 0,
       ],
     );
 
@@ -541,16 +578,82 @@ async function finishQuiz(channel: TextChannel, quizState: QuizState): Promise<v
       }
     }
 
-    execInTransaction(
-      'UPDATE users SET total_quizzes = total_quizzes + 1 WHERE user_id = ? AND guild_id = ?',
-      [quizState.userId, quizState.guildId],
-    );
+    for (const [, participant] of quizState.participants) {
+      const preUser = queryOne(
+        'SELECT current_streak, best_streak FROM users WHERE user_id = ? AND guild_id = ?',
+        [participant.userId, quizState.guildId],
+      );
+      const preStreak = (preUser?.current_streak as number) || 0;
+      const preBestStreak = (preUser?.best_streak as number) || 0;
+
+      const { currentStreak, bestStreak } = computeStreaks(participant, preStreak);
+      const finalBestStreak = Math.max(preBestStreak, bestStreak);
+
+      const displayName = usernameMap.get(participant.userId) || participant.username;
+      upsertUser(participant.userId, quizState.guildId, displayName);
+
+      execInTransaction(
+        `UPDATE users SET
+          correct_answers = correct_answers + ?,
+          wrong_answers = wrong_answers + ?,
+          points = points + ?,
+          coins = coins + ?,
+          total_quizzes = total_quizzes + 1,
+          current_streak = ?,
+          best_streak = ?
+         WHERE user_id = ? AND guild_id = ?`,
+        [
+          participant.correctCount,
+          participant.wrongCount,
+          participant.pointsEarned,
+          calculateCoins(1) * participant.correctCount,
+          currentStreak,
+          finalBestStreak,
+          participant.userId,
+          quizState.guildId,
+        ],
+      );
+
+      const position = positions.get(participant.userId) || 0;
+      if (position >= 1 && position <= 3) {
+        incrementUserPlacement(participant.userId, quizState.guildId, position);
+      }
+
+      const userRow = queryOne(
+        'SELECT points, level FROM users WHERE user_id = ? AND guild_id = ?',
+        [participant.userId, quizState.guildId],
+      );
+
+      if (userRow) {
+        const newLevel = calculateLevel(userRow.points as number);
+        if (newLevel !== (userRow.level as number)) {
+          execInTransaction(
+            'UPDATE users SET level = ? WHERE user_id = ? AND guild_id = ?',
+            [newLevel, participant.userId, quizState.guildId],
+          );
+        }
+      }
+
+      execInTransaction(
+        `INSERT INTO quiz_participants (session_id, user_id, correct_count, wrong_count, total_time, points_earned, position)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          sessionId,
+          participant.userId,
+          participant.correctCount,
+          participant.wrongCount,
+          participant.totalTime,
+          participant.pointsEarned,
+          position,
+        ],
+      );
+    }
 
     commitTransaction();
   } catch (err) {
     console.error('[QUIZ TRANSACTION ERROR]', err);
-    try { rollbackTransaction(); } catch (_) { /* already committed or no transaction active */ }
-    await channel.send({ embeds: [buildErrorEmbed('An error occurred while saving quiz results. Please try again.')] }).catch(() => {});
+    try { rollbackTransaction(); } catch (_) { /* no active transaction */ }
+    await channel.send({ embeds: [buildErrorEmbed('حدث خطأ أثناء حفظ نتائج الاختبار.')] }).catch(() => {});
     activeQuizzes.delete(key);
     return;
   }
@@ -564,7 +667,23 @@ async function finishQuiz(channel: TextChannel, quizState: QuizState): Promise<v
   const levelUp = finalLevel > previousLevel;
   const nextLevelPoints = (finalLevel + 1) * (finalLevel + 1) * 50;
 
-  const validationMsg = buildValidationMessage(quizState, results);
+  const topParticipants = Array.from(quizState.participants.values())
+    .filter(p => p.correctCount > 0 || p.wrongCount > 0)
+    .sort((a, b) => {
+      const posA = positions.get(a.userId) || 999;
+      const posB = positions.get(b.userId) || 999;
+      return posA - posB;
+    })
+    .slice(0, 10);
+
+  const totalParticipants = quizState.participants.size;
+  const totalCorrectAll = Array.from(quizState.participants.values())
+    .reduce((sum, p) => sum + p.correctCount, 0);
+  const totalWrongAll = Array.from(quizState.participants.values())
+    .reduce((sum, p) => sum + p.wrongCount, 0);
+  const totalAnswerAll = totalCorrectAll + totalWrongAll;
+  const accuracyRate = totalAnswerAll > 0 ? Math.round((totalCorrectAll / totalAnswerAll) * 100) : 0;
+  const quizDuration = Math.round((Date.now() - quizState.startTime) / 1000);
 
   const finalEmbed = buildFinalResultsEmbed(
     quizState.totalQuestions,
@@ -576,7 +695,11 @@ async function finishQuiz(channel: TextChannel, quizState: QuizState): Promise<v
     finalLevel,
     nextLevelPoints,
     levelUp,
-    validationMsg,
+    topParticipants,
+    positions,
+    totalParticipants,
+    accuracyRate,
+    quizDuration,
   );
 
   try {
@@ -588,7 +711,7 @@ async function finishQuiz(channel: TextChannel, quizState: QuizState): Promise<v
   if (levelUp) {
     try {
       await channel.send({
-        content: `<@${quizState.userId}> **🎉 Congratulations! You reached level ${finalLevel}!**`,
+        content: `<@${quizState.userId}> **🎉 تهانينا! لقد وصلت إلى المستوى ${finalLevel}!**`,
       });
     } catch (err) {
       console.error('[QUIZ ERROR] Failed to send level-up message:', err);
@@ -596,37 +719,6 @@ async function finishQuiz(channel: TextChannel, quizState: QuizState): Promise<v
   }
 
   activeQuizzes.delete(key);
-}
-
-function buildValidationMessage(
-  quizState: QuizState,
-  results: ReturnType<typeof validateResults>,
-): string {
-  const totalQuestions = quizState.totalQuestions;
-  const sum = results.correctCount + results.wrongCount + results.skippedCount;
-  const messages: string[] = [];
-
-  if (sum !== totalQuestions) {
-    messages.push(
-      `❌ Mismatch: correct(${results.correctCount}) + wrong(${results.wrongCount}) + skipped(${results.skippedCount}) = ${sum} ≠ ${totalQuestions}`,
-    );
-  }
-
-  const emptyQuestions: number[] = [];
-  for (let i = 0; i < totalQuestions; i++) {
-    if (!quizState.answers[i]) {
-      emptyQuestions.push(i + 1);
-    }
-  }
-  if (emptyQuestions.length > 0) {
-    messages.push(`⚠️ Unrecorded questions: ${emptyQuestions.join(', ')}`);
-  }
-
-  if (messages.length === 0) {
-    messages.push('✅ All statistics match');
-  }
-
-  return messages.join('\n');
 }
 
 export function recalculateQuizFromDb(sessionId: number): {
