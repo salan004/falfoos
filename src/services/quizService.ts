@@ -9,12 +9,12 @@ import {
   ComponentType,
 } from 'discord.js';
 import { config } from '../config';
-import { QuizState, AnswerRecord, QuestionRoundState, ParticipantData } from '../types/quiz';
+import { QuizState, AnswerRecord, QuestionRoundState, ParticipantData, RoundParticipantResult } from '../types/quiz';
 import { getRandomQuestion } from '../database/questions';
 import {
-  upsertUser,
+  upsertUserInTransaction,
   getUser,
-  incrementUserPlacement,
+  incrementUserPlacementInTransaction,
 } from '../database/users';
 import { calculateLevel } from './levelService';
 import { calculateCoins } from './coinService';
@@ -452,6 +452,24 @@ async function endQuestionRound(
 
   const totalVoters = round.votes.size;
 
+  const roundResults: RoundParticipantResult[] = [];
+  for (const userId of quizState.registeredUsers) {
+    const vote = round.votes.get(userId);
+    if (!vote) {
+      roundResults.push({ userId, answer: null, isCorrect: false, responseTime: config.quizTimeLimit, points: 0 });
+      continue;
+    }
+    const answerLetter = ANSWER_ID_TO_LETTER[vote.answerId] || null;
+    const isCorrect = vote.answerId === correctAnswerId;
+    const responseTime = vote.votedAt - round.questionStartedAt;
+    let pts = 0;
+    if (isCorrect) {
+      pts = config.pointsPerCorrect(question.difficulty);
+      if (responseTime <= config.speedBonusWindow) pts += config.speedBonusPoints;
+    }
+    roundResults.push({ userId, answer: answerLetter, isCorrect, responseTime, points: pts });
+  }
+
   const disabledRow1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     ...(['A', 'B'] as const).map(letter =>
       new ButtonBuilder()
@@ -500,8 +518,7 @@ async function endQuestionRound(
         question,
         quizState.currentIndex + 1,
         quizState.totalQuestions,
-        winnerIds,
-        totalVoters,
+        roundResults,
         quizState.totalRegistered,
       )],
     });
@@ -571,6 +588,7 @@ async function recordRoundResults(
         wrongCount: 0,
         totalTime: 0,
         pointsEarned: 0,
+        coinsEarned: 0,
         answerSequence: [],
       };
       quizState.participants.set(userId, participant);
@@ -584,6 +602,7 @@ async function recordRoundResults(
       const earnedPoints = pts + (isSpeedBonus ? config.speedBonusPoints : 0);
 
       participant.pointsEarned += earnedPoints;
+      participant.coinsEarned += calculateCoins(question.difficulty);
       participant.answerSequence.push(true);
 
       if (userId === quizState.userId) {
@@ -708,6 +727,8 @@ export function recalculatePointsFromAnswers(quizState: QuizState): { points: nu
   return { points, coins };
 }
 
+
+
 async function finishQuiz(channel: TextChannel, quizState: QuizState): Promise<void> {
   const key = getChannelQuizKey(quizState.guildId, quizState.channelId);
   quizState.status = 'completed';
@@ -790,7 +811,7 @@ async function finishQuiz(channel: TextChannel, quizState: QuizState): Promise<v
       const finalBestStreak = Math.max(preBestStreak, bestStreak);
 
       const displayName = usernameMap.get(participant.userId) || participant.username;
-      upsertUser(participant.userId, quizState.guildId, displayName);
+      upsertUserInTransaction(participant.userId, quizState.guildId, displayName);
 
       execInTransaction(
         `UPDATE users SET
@@ -806,7 +827,7 @@ async function finishQuiz(channel: TextChannel, quizState: QuizState): Promise<v
           participant.correctCount,
           participant.wrongCount,
           participant.pointsEarned,
-          calculateCoins(1) * participant.correctCount,
+          participant.coinsEarned,
           currentStreak,
           finalBestStreak,
           participant.userId,
@@ -816,7 +837,7 @@ async function finishQuiz(channel: TextChannel, quizState: QuizState): Promise<v
 
       const position = positions.get(participant.userId) || 0;
       if (position >= 1 && position <= 3) {
-        incrementUserPlacement(participant.userId, quizState.guildId, position);
+        incrementUserPlacementInTransaction(participant.userId, quizState.guildId, position);
       }
 
       const userRow = queryOne(

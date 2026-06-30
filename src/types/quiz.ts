@@ -39,6 +39,7 @@ export interface ParticipantData {
   wrongCount: number;
   totalTime: number;
   pointsEarned: number;
+  coinsEarned: number;
   answerSequence: boolean[];
 }
 
@@ -76,6 +77,14 @@ export interface QuizState {
     wrong_answers: number;
     current_streak: number;
   } | null;
+}
+
+export interface RoundParticipantResult {
+  userId: string;
+  answer: string | null;
+  isCorrect: boolean;
+  responseTime: number;
+  points: number;
 }
 
 export interface LeaderboardEntry {

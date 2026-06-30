@@ -1,6 +1,10 @@
 import { EmbedBuilder, ColorResolvable } from 'discord.js';
-import { Question, ParticipantData } from '../types/quiz';
+import { Question, ParticipantData, RoundParticipantResult } from '../types/quiz';
 import { LETTER_LABELS, getCorrectAnswerLabel, getQuestionOptions, ANSWER_LETTERS } from './quizHelpers';
+
+const SHINY_BLUE = '#4a9eff' as ColorResolvable;
+const CORRECT_GREEN = '#00e676' as ColorResolvable;
+const WRONG_RED = '#ff5252' as ColorResolvable;
 
 export function buildActiveQuizEmbed(
   question: Question,
@@ -52,17 +56,21 @@ export function buildQuizRevealEmbed(
     ? `\n📖 **الشرح:** ${question.source}\n`
     : '';
 
+  const questionLine = `\`\`\`\n${question.questionAr}\n\`\`\``;
+
   return new EmbedBuilder()
-    .setColor('#f5a623' as ColorResolvable)
-    .setTitle(`📖 ${question.categoryNameAr || 'مسابقة إسلامية'} — النتيجة`)
+    .setColor(SHINY_BLUE)
+    .setTitle(`✨ ${question.categoryNameAr || 'مسابقة إسلامية'} — النتيجة`)
     .setDescription(
-      `**السؤال ${questionNumber}/${totalQuestions}** | ${difficultyStars}\n\n` +
-      `> ${question.questionAr}\n\n` +
+      `━━━━━━━━━━━━━━━━━━\n` +
+      `**السؤال ${questionNumber}/${totalQuestions}** ${difficultyStars}\n\n` +
+      `${questionLine}\n` +
+      `━━━━━━━━━━━━━━━━━━\n\n` +
       `✅ **الإجابة الصحيحة:** ${correctLetter} ─ ${correctLabel}\n` +
       explanationLine +
-      `⏱ **مدة السؤال:** ${durationSeconds}ث\n` +
-      `👥 **المسجلون:** ${totalRegistered}\n\n` +
-      `🏆 **الإجابات الصحيحة**\n${winnersSection}`,
+      `⏱ **المدة:** ${durationSeconds}ث • 👥 ${totalRegistered}\n\n` +
+      `━━━━━━━━━━━━━━━━━━\n` +
+      `**🏆 الإجابات الصحيحة**\n${winnersSection}`,
     )
     .setTimestamp();
 }
@@ -226,48 +234,56 @@ export function buildQuestionResultsEmbed(
   question: Question,
   questionNumber: number,
   totalQuestions: number,
-  winnerIds: string[],
-  totalVoters: number,
+  roundResults: RoundParticipantResult[],
   totalRegistered: number,
 ): EmbedBuilder {
   const correctLabel = getCorrectAnswerLabel(question);
-  const options = getQuestionOptions(question);
-
   const correctLetterAr = LETTER_LABELS[question.correctAnswer];
 
-  const optionsLines = ANSWER_LETTERS.map(letter => {
-    const label = options[letter];
-    if (letter === question.correctAnswer) {
-      return `✅ **${LETTER_LABELS[letter]}** ─ ~~${label}~~ **(الإجابة الصحيحة)**`;
-    }
-    return `❌ ~~**${LETTER_LABELS[letter]}** ─ ${label}~~`;
+  const questionLine = `\`\`\`\n${question.questionAr}\n\`\`\``;
+
+  const sortedResults = [...roundResults].sort((a, b) => {
+    if (a.isCorrect !== b.isCorrect) return a.isCorrect ? -1 : 1;
+    return a.responseTime - b.responseTime;
   });
 
-  const winnersSection = winnerIds.length > 0
-    ? winnerIds.map((id, i) => {
-        const medals = ['🥇', '🥈', '🥉'];
-        const prefix = i < 3 ? medals[i] : '•';
-        return `${prefix} <@${id}>`;
-      }).join('\n')
-    : '❌ لم يجب أحد بشكل صحيح.';
+  const totalVoters = sortedResults.filter(r => r.answer !== null).length;
+  const correctCount = sortedResults.filter(r => r.isCorrect).length;
 
-  const correctCount = winnerIds.length;
+  const participantLines = sortedResults.map((r, i) => {
+    const positionEmojis = ['🥇', '🥈', '🥉'];
+    const prefix = i < 3 ? positionEmojis[i] : '•';
+
+    if (r.answer === null) {
+      return `${prefix} <@${r.userId}> — ⏭ لم يجب`;
+    }
+
+    const answerStr = `${LETTER_LABELS[r.answer as 'A' | 'B' | 'C' | 'D']}`;
+    if (r.isCorrect) {
+      return `${prefix} <@${r.userId}> — ✅ **${answerStr}** (جواب صحيح) ✨ +${r.points} 🎯`;
+    }
+    return `${prefix} <@${r.userId}> — ❌ ${answerStr} (خطأ)`;
+  });
+
+  const participantsSection = participantLines.length > 0
+    ? participantLines.join('\n')
+    : 'لا يوجد مشاركون';
 
   return new EmbedBuilder()
-    .setColor('#f5a623' as ColorResolvable)
-    .setTitle(`📊 نتائج السؤال ${questionNumber}/${totalQuestions}`)
+    .setColor(SHINY_BLUE)
+    .setTitle(`✨ نتيجة السؤال ${questionNumber}/${totalQuestions}`)
     .setDescription(
       `━━━━━━━━━━━━━━━━━━\n\n` +
-      `✅ **الإجابة الصحيحة:**\n${correctLetterAr} ─ ${correctLabel}\n\n` +
-      `${optionsLines.join('\n')}\n\n` +
+      `${questionLine}\n\n` +
       `━━━━━━━━━━━━━━━━━━\n\n` +
-      `👥 **المسجلون في المسابقة:** ${totalRegistered}\n` +
-      `👥 **المصوتون في هذا السؤال:** ${totalVoters}\n\n` +
-      `🎯 **عدد الإجابات الصحيحة:** ${correctCount}\n\n` +
-      `🏆 **الذين أجابوا بشكل صحيح:**\n${winnersSection}\n\n` +
+      `✅ **الإجابة الصحيحة:** ${correctLetterAr} ─ ${correctLabel}\n\n` +
+      `━━━━━━━━━━━━━━━━━━\n` +
+      `👥 ${totalRegistered} متسابق • 🎯 ${correctCount} إجابة صحيحة\n` +
+      `━━━━━━━━━━━━━━━━━━\n\n` +
+      `${participantsSection}\n\n` +
       `━━━━━━━━━━━━━━━━━━`,
     )
-    .setFooter({ text: 'استعد للسؤال التالي...' })
+    .setFooter({ text: '🌟 استعد للسؤال التالي...' })
     .setTimestamp();
 }
 

@@ -77,6 +77,29 @@ export function incrementUserPlacement(userId: string, guildId: string, position
   }
 }
 
+export function upsertUserInTransaction(userId: string, guildId: string, username: string): void {
+  const existing = queryOne('SELECT 1 FROM users WHERE user_id = ? AND guild_id = ?', [userId, guildId]);
+
+  if (existing) {
+    execInTransaction('UPDATE users SET username = ? WHERE user_id = ? AND guild_id = ?', [username, userId, guildId]);
+  } else {
+    execInTransaction(
+      'INSERT INTO users (user_id, guild_id, username) VALUES (?, ?, ?)',
+      [userId, guildId, username],
+    );
+  }
+}
+
+export function incrementUserPlacementInTransaction(userId: string, guildId: string, position: number): void {
+  if (position === 1) {
+    execInTransaction('UPDATE users SET first_place = first_place + 1, total_wins = total_wins + 1 WHERE user_id = ? AND guild_id = ?', [userId, guildId]);
+  } else if (position === 2) {
+    execInTransaction('UPDATE users SET second_place = second_place + 1 WHERE user_id = ? AND guild_id = ?', [userId, guildId]);
+  } else if (position === 3) {
+    execInTransaction('UPDATE users SET third_place = third_place + 1 WHERE user_id = ? AND guild_id = ?', [userId, guildId]);
+  }
+}
+
 export function getLeaderboard(guildId: string, limit: number, offset: number) {
   const rows = queryAll(
     `SELECT user_id, username, points, level, correct_answers, wrong_answers, first_place
