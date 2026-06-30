@@ -42,6 +42,13 @@ export interface ParticipantData {
   answerSequence: boolean[];
 }
 
+export interface RegistrationState {
+  messageId: string | null;
+  registeredUsers: Set<string>;
+  timerInterval: ReturnType<typeof setInterval> | null;
+  endTimeout: ReturnType<typeof setTimeout> | null;
+}
+
 export interface QuizState {
   guildId: string;
   channelId: string;
@@ -57,6 +64,7 @@ export interface QuizState {
   pointsEarned: number;
   coinsEarned: number;
   round: QuestionRoundState | null;
+  registration: RegistrationState | null;
   participants: Map<string, ParticipantData>;
   preQuizUserSnapshot: {
     points: number;

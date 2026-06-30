@@ -4,6 +4,10 @@ import {
   PollAnswer,
   TextChannel,
   Guild,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ComponentType,
 } from 'discord.js';
 import { config } from '../config';
 import { QuizState, AnswerRecord, QuestionRoundState, ParticipantData } from '../types/quiz';
@@ -20,6 +24,8 @@ import {
   buildQuizRevealEmbed,
   buildFinalResultsEmbed,
   buildErrorEmbed,
+  buildRegistrationEmbed,
+  buildQuestionResultsEmbed,
 } from '../utils/embedBuilder';
 import {
   ANSWER_ID_MAP,
@@ -36,6 +42,9 @@ import {
   queryOne,
   queryAll,
 } from '../database/helpers';
+
+const REGISTRATION_DURATION = 30_000;
+const DELAY_BETWEEN_QUESTIONS = 5_000;
 
 const activeQuizzes = new Collection<string, QuizState>();
 const messageQuizMap = new Collection<string, string>();
@@ -66,9 +75,21 @@ function clearRoundTimers(round: QuestionRoundState | null): void {
   }
 }
 
+function clearRegistrationTimers(quiz: QuizState): void {
+  if (!quiz.registration) return;
+  if (quiz.registration.timerInterval) {
+    clearInterval(quiz.registration.timerInterval);
+    quiz.registration.timerInterval = null;
+  }
+  if (quiz.registration.endTimeout) {
+    clearTimeout(quiz.registration.endTimeout);
+    quiz.registration.endTimeout = null;
+  }
+}
+
 export function isQuizActiveInChannel(guildId: string, channelId: string): boolean {
   const quiz = activeQuizzes.get(getChannelQuizKey(guildId, channelId));
-  return quiz !== undefined && quiz.status === 'active';
+  return quiz !== undefined && (quiz.status === 'active' || quiz.registration !== null);
 }
 
 export function getActiveQuizByChannel(guildId: string, channelId: string): QuizState | undefined {
@@ -109,6 +130,7 @@ export async function startQuiz(
   categoryId?: number,
 ): Promise<void> {
   const guildId = channel.guildId;
+  const key = getChannelQuizKey(guildId, channel.id);
 
   if (isQuizActiveInChannel(guildId, channel.id)) {
     await channel.send({
@@ -133,7 +155,6 @@ export async function startQuiz(
   }
 
   const startUser = getUser(userId, guildId);
-  const key = getChannelQuizKey(guildId, channel.id);
 
   const quizState: QuizState = {
     guildId,
@@ -150,6 +171,12 @@ export async function startQuiz(
     pointsEarned: 0,
     coinsEarned: 0,
     round: null,
+    registration: {
+      messageId: null,
+      registeredUsers: new Set<string>(),
+      timerInterval: null,
+      endTimeout: null,
+    },
     participants: new Map(),
     preQuizUserSnapshot: startUser
       ? {
@@ -164,6 +191,126 @@ export async function startQuiz(
   };
 
   activeQuizzes.set(key, quizState);
+  await startRegistrationPhase(channel, quizState);
+}
+
+async function startRegistrationPhase(channel: TextChannel, quizState: QuizState): Promise<void> {
+  const endTimestamp = Math.floor((Date.now() + REGISTRATION_DURATION) / 1000);
+
+  const joinButton = new ButtonBuilder()
+    .setCustomId('quiz_join')
+    .setLabel('انضمام')
+    .setStyle(ButtonStyle.Success)
+    .setEmoji('✅');
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(joinButton);
+
+  let message: Message;
+  try {
+    message = await channel.send({
+      embeds: [buildRegistrationEmbed(30, 0, endTimestamp)],
+      components: [row],
+    });
+  } catch (err) {
+    console.error('[REGISTRATION ERROR] Failed to send registration message:', err);
+    await channel.send({
+      embeds: [buildErrorEmbed('فشل في بدء التسجيل. تأكد من صلاحيات البوت.')],
+    });
+    activeQuizzes.delete(getChannelQuizKey(quizState.guildId, quizState.channelId));
+    return;
+  }
+
+  if (!quizState.registration) return;
+  quizState.registration.messageId = message.id;
+
+  const collector = message.createMessageComponentCollector({
+    componentType: ComponentType.Button,
+    filter: i => i.customId === 'quiz_join',
+    time: REGISTRATION_DURATION,
+  });
+
+  collector.on('collect', async i => {
+    if (!quizState.registration) return;
+
+    if (quizState.registration.registeredUsers.has(i.user.id)) {
+      await i.reply({
+        content: '✅ أنت مسجل بالفعل في المسابقة!',
+        ephemeral: true,
+      });
+      return;
+    }
+
+    quizState.registration.registeredUsers.add(i.user.id);
+
+    const count = quizState.registration.registeredUsers.size;
+    const remainingSeconds = Math.max(0, Math.ceil((REGISTRATION_DURATION - (Date.now() - quizState.startTime)) / 1000));
+
+    try {
+      await message.edit({
+        embeds: [buildRegistrationEmbed(remainingSeconds, count, endTimestamp)],
+        components: [row],
+      });
+    } catch { /* ignore */ }
+
+    await i.reply({
+      content: `✅ تم تسجيلك في المسابقة! عدد المسجلين: ${count}`,
+      ephemeral: true,
+    });
+  });
+
+  collector.on('end', async () => {
+    try {
+      await message.edit({ components: [] });
+    } catch { /* ignore */ }
+  });
+
+  let remainingSeconds = 30;
+  quizState.registration.timerInterval = setInterval(async () => {
+    remainingSeconds--;
+    if (remainingSeconds <= 0 || !quizState.registration) {
+      if (quizState.registration?.timerInterval) {
+        clearInterval(quizState.registration.timerInterval);
+        quizState.registration.timerInterval = null;
+      }
+      return;
+    }
+
+    try {
+      await message.edit({
+        embeds: [buildRegistrationEmbed(remainingSeconds, quizState.registration.registeredUsers.size, endTimestamp)],
+        components: [row],
+      });
+    } catch {
+      clearRegistrationTimers(quizState);
+    }
+  }, 1000);
+
+  quizState.registration.endTimeout = setTimeout(async () => {
+    clearRegistrationTimers(quizState);
+    await endRegistrationPhase(channel, quizState);
+  }, REGISTRATION_DURATION);
+}
+
+async function endRegistrationPhase(channel: TextChannel, quizState: QuizState): Promise<void> {
+  const registeredCount = quizState.registration?.registeredUsers.size || 0;
+
+  if (quizState.registration?.messageId) {
+    try {
+      const msg = await channel.messages.fetch(quizState.registration.messageId).catch(() => null);
+      if (msg) {
+        await msg.edit({ components: [] });
+      }
+    } catch { /* ignore */ }
+  }
+
+  quizState.registration = null;
+
+  if (registeredCount < 2) {
+    await channel.send('❌ تم إلغاء المسابقة لعدم اكتمال الحد الأدنى من المشاركين.');
+    activeQuizzes.delete(getChannelQuizKey(quizState.guildId, quizState.channelId));
+    return;
+  }
+
   await sendNextQuestion(channel, quizState);
 }
 
@@ -272,19 +419,20 @@ async function endQuestionRound(
   const correctAnswerId = ANSWER_ID_MAP[question.correctAnswer];
   const deadline = round.questionStartedAt + config.quizTimeLimit;
 
-  let message: Message | null = null;
+  const winnerIds = getCorrectVoters(round, correctAnswerId, deadline);
+
+  let pollMessage: Message | null = null;
   if (quizState.messageId) {
-    message = await channel.messages.fetch(quizState.messageId).catch(() => null);
-    if (message?.poll && !message.poll.resultsFinalized) {
+    pollMessage = await channel.messages.fetch(quizState.messageId).catch(() => null);
+    if (pollMessage?.poll && !pollMessage.poll.resultsFinalized) {
       try {
-        await message.poll.end();
+        await pollMessage.poll.end();
       } catch (err) {
         console.error('[QUIZ ERROR] Failed to end poll:', err);
       }
     }
   }
 
-  const winnerIds = getCorrectVoters(round, correctAnswerId, deadline);
   await recordRoundResults(quizState, question, round, winnerIds, channel.guild);
 
   const starterVote = round.votes.get(quizState.userId);
@@ -298,9 +446,11 @@ async function endQuestionRound(
     status: starterVote ? 'answered' : 'skipped',
   };
 
-  if (message) {
+  const totalVoters = round.votes.size;
+
+  if (pollMessage) {
     try {
-      await message.edit({
+      await pollMessage.edit({
         embeds: [
           buildQuizRevealEmbed(
             question,
@@ -316,8 +466,18 @@ async function endQuestionRound(
     }
   }
 
-  if (reason === 'skipped') {
-    await channel.send('⏭️ تم تخطي السؤال. الانتقال إلى السؤال التالي...').catch(() => {});
+  try {
+    await channel.send({
+      embeds: [buildQuestionResultsEmbed(
+        question,
+        quizState.currentIndex + 1,
+        quizState.totalQuestions,
+        winnerIds,
+        totalVoters,
+      )],
+    });
+  } catch (err) {
+    console.error('[QUIZ ERROR] Failed to send results embed:', err);
   }
 
   if (quizState.messageId) {
@@ -326,6 +486,8 @@ async function endQuestionRound(
   quizState.messageId = null;
   quizState.round = null;
   quizState.currentIndex++;
+
+  await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_QUESTIONS));
 
   await sendNextQuestion(channel, quizState);
 }

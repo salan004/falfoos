@@ -30,7 +30,7 @@ export async function handleQuizCommand(interaction: ChatInputCommandInteraction
   }
 
   await interaction.editReply({
-    content: `📖 **Quiz started!** ${totalQuestions} question(s).\nCheck ${channel} to vote in the poll.`,
+    content: `📖 **بدأت المسابقة!** عدد الأسئلة: ${totalQuestions}\nتم بدء التسجيل في ${channel} - اضغط على زر **انضمام** للمشاركة.`,
   });
 
   await startQuiz(channel, interaction.user.id, totalQuestions, categoryId);

@@ -1,6 +1,6 @@
 import { EmbedBuilder, ColorResolvable } from 'discord.js';
 import { Question, ParticipantData } from '../types/quiz';
-import { LETTER_LABELS, getCorrectAnswerLabel, getQuestionOptions } from './quizHelpers';
+import { LETTER_LABELS, getCorrectAnswerLabel, getQuestionOptions, ANSWER_LETTERS } from './quizHelpers';
 
 export function buildActiveQuizEmbed(
   question: Question,
@@ -186,6 +186,75 @@ export function buildProfileEmbed(data: {
       `**🥉 المركز الثالث:** ${data.thirdPlace}\n` +
       `**🏆 إجمالي الفوز:** ${data.totalWins}`,
     )
+    .setTimestamp();
+}
+
+export function buildRegistrationEmbed(
+  remainingSeconds: number,
+  registeredCount: number,
+  endTimestamp: number,
+): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor('#1a7c3a' as ColorResolvable)
+    .setTitle('📖 بدأت المسابقة الدينية')
+    .setDescription(
+      '⏳ بدأ تسجيل المتسابقين.\n\n' +
+      `⌛ **الوقت المتبقي:** <t:${endTimestamp}:R>\n` +
+      `　　（${remainingSeconds} ثانية）\n\n` +
+      `👥 **عدد المسجلين:** ${registeredCount}\n\n` +
+      `✅ **الحد الأدنى:** 2 متسابقين\n\n` +
+      `♾️ **الحد الأقصى:** غير محدود\n\n` +
+      '━━━━━━━━━━━━━━━━━━\n' +
+      'اضغط على زر **انضمام** للمشاركة.',
+    )
+    .setFooter({ text: 'سيبدأ الاختبار تلقائياً بعد انتهاء التسجيل' })
+    .setTimestamp();
+}
+
+export function buildQuestionResultsEmbed(
+  question: Question,
+  questionNumber: number,
+  totalQuestions: number,
+  winnerIds: string[],
+  totalVoters: number,
+): EmbedBuilder {
+  const correctLabel = getCorrectAnswerLabel(question);
+  const options = getQuestionOptions(question);
+
+  const correctLetterAr = LETTER_LABELS[question.correctAnswer];
+
+  const optionsLines = ANSWER_LETTERS.map(letter => {
+    const label = options[letter];
+    if (letter === question.correctAnswer) {
+      return `✅ **${LETTER_LABELS[letter]}** ─ ~~${label}~~ **(الإجابة الصحيحة)**`;
+    }
+    return `❌ ~~**${LETTER_LABELS[letter]}** ─ ${label}~~`;
+  });
+
+  const winnersSection = winnerIds.length > 0
+    ? winnerIds.map((id, i) => {
+        const medals = ['🥇', '🥈', '🥉'];
+        const prefix = i < 3 ? medals[i] : '•';
+        return `${prefix} <@${id}>`;
+      }).join('\n')
+    : '❌ لم يجب أحد بشكل صحيح.';
+
+  const correctCount = winnerIds.length;
+
+  return new EmbedBuilder()
+    .setColor('#f5a623' as ColorResolvable)
+    .setTitle(`📊 نتائج السؤال ${questionNumber}/${totalQuestions}`)
+    .setDescription(
+      `━━━━━━━━━━━━━━━━━━\n\n` +
+      `✅ **الإجابة الصحيحة:**\n${correctLetterAr} ─ ${correctLabel}\n\n` +
+      `${optionsLines.join('\n')}\n\n` +
+      `━━━━━━━━━━━━━━━━━━\n\n` +
+      `👥 **عدد المشاركين:** ${totalVoters}\n\n` +
+      `🎯 **عدد الإجابات الصحيحة:** ${correctCount}\n\n` +
+      `🏆 **الذين أجابوا بشكل صحيح:**\n${winnersSection}\n\n` +
+      `━━━━━━━━━━━━━━━━━━`,
+    )
+    .setFooter({ text: 'استعد للسؤال التالي...' })
     .setTimestamp();
 }
 
