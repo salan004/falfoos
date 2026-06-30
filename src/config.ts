@@ -5,7 +5,7 @@ export const config = {
   clientId: process.env.CLIENT_ID || '',
   guildId: process.env.GUILD_ID || '',
   adminRoleId: process.env.ADMIN_ROLE_ID || '',
-  quizTimeLimit: 60_000,
+  quizTimeLimit: 30_000,
   speedBonusWindow: 10_000,
   pointsPerCorrect: (difficulty: number) => 10 + difficulty * 5,
   speedBonusPoints: 5,
