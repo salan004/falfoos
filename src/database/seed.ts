@@ -499,32 +499,38 @@ export async function seedDatabase(): Promise<void> {
   await initDb();
   initializeSchema();
 
-  const row = queryOne('SELECT COUNT(*) as count FROM categories');
-  if (row && (row.count as number) > 0) {
-    console.log('✅ قاعدة البيانات تحتوي بالفعل على بيانات. تخطي البذر.');
-    return;
-  }
-
   const categoryIds: Record<string, number> = {};
 
   for (const cat of categories) {
-    const id = executeInsert('INSERT INTO categories (name_ar, name_en) VALUES (?, ?)', [cat.name_ar, cat.name_en]);
-    categoryIds[cat.name_ar] = id;
-  }
-
-  let count = 0;
-  for (const q of questions) {
-    const catId = categoryIds[q.categoryName];
-    if (catId) {
-      executeInsert(
-        'INSERT INTO questions (category_id, question_ar, option_a, option_b, option_c, option_d, correct_answer, difficulty, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [catId, q.question_ar, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_answer, q.difficulty, q.source || null],
-      );
-      count++;
+    const existing = queryOne('SELECT id FROM categories WHERE name_ar = ?', [cat.name_ar]);
+    if (existing) {
+      categoryIds[cat.name_ar] = existing.id as number;
+    } else {
+      const id = executeInsert('INSERT INTO categories (name_ar, name_en) VALUES (?, ?)', [cat.name_ar, cat.name_en]);
+      categoryIds[cat.name_ar] = id;
     }
   }
 
-  console.log(`✅ تم بذر قاعدة البيانات بنجاح! ${count} سؤال في ${Object.keys(categoryIds).length} تصنيف.`);
+  let added = 0;
+  let skipped = 0;
+  for (const q of questions) {
+    const catId = categoryIds[q.categoryName];
+    if (!catId) continue;
+    const existing = queryOne('SELECT id FROM questions WHERE question_ar = ?', [q.question_ar]);
+    if (existing) {
+      skipped++;
+      continue;
+    }
+    executeInsert(
+      'INSERT INTO questions (category_id, question_ar, option_a, option_b, option_c, option_d, correct_answer, difficulty, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [catId, q.question_ar, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_answer, q.difficulty, q.source || null],
+    );
+    added++;
+  }
+
+  const totalRow = queryOne('SELECT COUNT(*) as count FROM questions');
+  const totalQuestions = (totalRow?.count as number) || 0;
+  console.log(`✅ تم بذر قاعدة البيانات! ${categories.length} تصنيف, ${totalQuestions} سؤال (أضيف ${added} جديد, تخطي ${skipped} موجود).`);
 }
 
 if (require.main === module) {

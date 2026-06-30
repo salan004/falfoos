@@ -20,7 +20,7 @@ export function getRandomQuestion(categoryId?: number): Question | null {
   `;
   const params: unknown[] = [];
 
-  if (categoryId && !isGeneralCategory(categoryId)) {
+  if (categoryId) {
     sql += ' WHERE q.category_id = ?';
     params.push(categoryId);
   }
