@@ -25,6 +25,7 @@ import {
   buildErrorEmbed,
   buildRegistrationEmbed,
   buildQuestionResultsEmbed,
+  buildPersonalResultEmbed,
 } from '../utils/embedBuilder';
 import {
   ANSWER_ID_MAP,
@@ -928,6 +929,18 @@ async function finishQuiz(channel: TextChannel, quizState: QuizState): Promise<v
     await channel.send({ embeds: [finalEmbed] });
   } catch (err) {
     console.error('[QUIZ ERROR] Failed to send results embed:', err);
+  }
+
+  for (const [, participant] of quizState.participants) {
+    const pos = positions.get(participant.userId) || 0;
+    try {
+      const member = await channel.guild.members.fetch(participant.userId).catch(() => null);
+      if (member) {
+        await member.send({
+          embeds: [buildPersonalResultEmbed(participant, quizState.totalQuestions, pos)],
+        }).catch(() => {});
+      }
+    } catch { /* ignore */ }
   }
 
   if (levelUp) {

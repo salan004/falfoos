@@ -20,8 +20,10 @@ export function buildActiveQuizEmbed(
     .setColor('#1a7c3a' as ColorResolvable)
     .setTitle(`📖 ${question.categoryNameAr || 'مسابقة إسلامية'}`)
     .setDescription(
+      `━━━━━━━━━━━━━━━━━━\n` +
       `**السؤال ${questionNumber}/${totalQuestions}** | ${difficultyStars}\n\n` +
-      `> ${question.questionAr}\n\n` +
+      `**${question.questionAr}**\n` +
+      `━━━━━━━━━━━━━━━━━━\n\n` +
       `**⏱ الوقت المتبقي: ${remainingSeconds}ث**\n\n` +
       `**${LETTER_LABELS.A}** ─ ${options.A}\n` +
       `**${LETTER_LABELS.B}** ─ ${options.B}\n` +
@@ -92,8 +94,6 @@ export function buildFinalResultsEmbed(
   quizDuration: number,
   winnerAvatarUrl: string = '',
 ): EmbedBuilder {
-  const accuracy = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
-
   const topLines: string[] = [];
   const positionEmojis: Record<number, string> = { 1: '🥇👑', 2: '🥈', 3: '🥉' };
 
@@ -113,12 +113,8 @@ export function buildFinalResultsEmbed(
     `━━━━━━━━━━━━━━━━━━\n`,
     participantsSection,
     `\n━━━━━━━━━━━━━━━━━━`,
-    `📊 **نتائجك:** ✅ ${correctCount}/${totalQuestions} | ❌ ${wrongCount} | ⏭ ${skippedCount}`,
     `👥 **المشاركون:** ${totalParticipants} | 🎯 **الدقة:** ${accuracyRate}% | ⏱ **المدة:** ${Math.floor(quizDuration / 60)}:${(quizDuration % 60).toString().padStart(2, '0')}`,
-    `━━━━━━━━━━━━━━━━━━`,
-    `**نقاطك:** +${pointsEarned} 🎯`,
-    `**المستوى:** ${level} 📈`,
-    levelUp ? '🎉 **تهانينا! لقد ارتفع مستواك!**' : '',
+    levelUp ? `━━━━━━━━━━━━━━━━━━\n🎉 **تهانينا! لقد ارتفع مستواك إلى ${level}!**` : '',
   ].filter(Boolean).join('\n');
 
   const embed = new EmbedBuilder()
@@ -292,6 +288,33 @@ export function buildErrorEmbed(message: string): EmbedBuilder {
     .setColor('#e74c3c' as ColorResolvable)
     .setTitle('⚠️ خطأ')
     .setDescription(message)
+    .setTimestamp();
+}
+
+export function buildPersonalResultEmbed(
+  participant: ParticipantData,
+  totalQuestions: number,
+  position: number,
+): EmbedBuilder {
+  const total = participant.correctCount + participant.wrongCount;
+  const accuracy = total > 0 ? Math.round((participant.correctCount / total) * 100) : 0;
+  const positionEmojis: Record<number, string> = { 1: '🥇👑', 2: '🥈', 3: '🥉' };
+  const positionStr = positionEmojis[position] || `#${position}`;
+
+  return new EmbedBuilder()
+    .setColor('#4a9eff' as ColorResolvable)
+    .setTitle(`📊 نتائجك في المسابقة`)
+    .setDescription(
+      `━━━━━━━━━━━━━━━━━━\n` +
+      `${positionStr} **الترتيب النهائي**\n` +
+      `━━━━━━━━━━━━━━━━━━\n\n` +
+      `✅ **الإجابات الصحيحة:** ${participant.correctCount}/${totalQuestions}\n` +
+      `❌ **الإجابات الخاطئة:** ${participant.wrongCount}\n` +
+      `⏭ **لم يجب:** ${totalQuestions - total}\n` +
+      `📈 **نسبة الدقة:** ${accuracy}%\n` +
+      `🎯 **النقاط المكتسبة:** +${participant.pointsEarned}\n\n` +
+      `━━━━━━━━━━━━━━━━━━`,
+    )
     .setTimestamp();
 }
 
